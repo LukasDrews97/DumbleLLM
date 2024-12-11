@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9, <3.13"
 dependencies = [
+    "sentencepiece>=0.2.0",
     "torch>=2.5.1",
     "torchvision>=0.20.1",
 ]
@@ -17,3 +18,9 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    "notebook>=7.3.1",
+]
