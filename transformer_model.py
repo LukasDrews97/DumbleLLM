@@ -39,8 +39,14 @@ class DumbleLLM(nn.Module):
 
         x = self.pos_embedding(pos) + self.token_embedding(tokens)
         x = self.blocks(x)
-        x = self.output(self.norm(x))
-        return x
+        logits = self.output(self.norm(x))
+
+        loss = None
+
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
+
+        return logits, loss
 
     @torch.inference_mode()
     def generate(self, tokens):
@@ -86,8 +92,8 @@ class TransformerBlock(nn.Module):
         self.feed_forward = FeedForward(config)
     
     def forward(self, x):
-        x += self.attention(self.att_norm(x))
-        x += self.feed_forward(self.ffn_norm(x))
+        x = x + self.attention(self.att_norm(x))
+        x = x + self.feed_forward(self.ffn_norm(x))
         return x
 
 

@@ -3,10 +3,9 @@ from transformer_model import DumbleLLM
 from config import TrainingConfig
 from data_loader import Dataset
 import torch
+from tqdm import tqdm
 
 TRAINING_DATA = 'data/input.txt'
-
-
 
 
 if __name__ == '__main__':
@@ -37,10 +36,27 @@ if __name__ == '__main__':
             drop_last=True
     )
 
-    for images, targets in train_dataloader:
-        print(images, targets)
+    #torch.autograd.set_detect_anomaly(True)
 
-    #model = DumbleLLM(config)
-    #model.to(config.device)
+    model = DumbleLLM(config)
+    model.to(config.device)
+
+    # TODO: add LRScheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+    # TODO: gradient accumulation
+    for idx, (token, targets) in enumerate(train_dataloader):
+        token, targets = token.to(config.device), targets.to(config.device)
+        model.train()
+
+        optimizer.zero_grad()
+        logits, loss = model(token, targets)
+        loss.backward()
+        optimizer.step()
+        print(f"step {idx}, loss: {loss.item()}")
+        
+        with torch.no_grad():
+            model.eval()
+            pass
 
     #print(model.forward(torch.tensor(ids, device=config.device).view(1, -1)))
