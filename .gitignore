@@ -4,7 +4,9 @@
 # Training data
 data/
 
-
+# Tokenizer
+*.vocab
+*.model
 
 
 # Byte-compiled / optimized / DLL files
