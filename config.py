@@ -11,3 +11,4 @@ class TrainingConfig:
     n_key_value_heads: int = 4# 8
     dropout : float = 0.2
     device: str = 'cuda'
+    batch_size: int = 32
