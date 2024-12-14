@@ -2,7 +2,7 @@ import os
 import glob
 from sentencepiece import SentencePieceTrainer, SentencePieceProcessor
 
-
+# TODO: refactor 
 class Tokenizer:
     def __init__(self, input_file, vocab_size=4096, retrain=False):
         model = glob.glob("*.model")
@@ -57,3 +57,7 @@ class Tokenizer:
 
     def decode(self, tokens):
         return self.sp.decode(tokens)
+    
+    @classmethod
+    def from_file(file_path):
+        pass

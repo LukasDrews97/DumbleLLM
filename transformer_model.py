@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from config import TrainingConfig
-
+from typing import Optional, List
 
 class RotaryEmbedding(nn.Module):
     def __init__(self):
@@ -21,9 +21,10 @@ class Residual(nn.Module):
 
 
 class DumbleLLM(nn.Module):
-    def __init__(self, config: TrainingConfig):
+    def __init__(self, config: TrainingConfig, tokenizer):
         super().__init__()
         self.config = config
+        self.tokenizer = tokenizer
         self.token_embedding = nn.Embedding(config.vocab_size, config.model_dim)
         self.pos_embedding = nn.Embedding(config.vocab_size, config.model_dim) # TODO: replace with RotaryEmbedding
         self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layers)])
@@ -42,17 +43,39 @@ class DumbleLLM(nn.Module):
         logits = self.output(self.norm(x))
 
         loss = None
-
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
 
         return logits, loss
 
+    # TODO: top-p sampling
     @torch.inference_mode()
-    def generate(self, tokens):
-        pass
+    def top_p_sampling(self, prompts: List[str], temperature: float = 0.6, p: float = 0.9, max_length: Optional[int] = None):
 
+        if max_length is None:
+            max_length = self.config.context_length
 
+        for p in prompts:
+            tokens = torch.tensor(self.tokenizer.encode(p, add_bos=True, add_eps=False)).view(1, -1)
+            tokens = tokens.to(self.config.device)
+        
+
+    @torch.inference_mode()
+    def generate(self, tokens, max_length):
+        res = tokens
+        while res.shape[1] < max_length:
+            with torch.autocast(device_type=self.config.device, dtype=torch.bfloat16):
+                logits, _ = self.forward(res)
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, dim=-1)
+            topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+            idx = torch.multinomial(topk_probs, 1) # (B, 1)
+            xcol = torch.gather(topk_indices, -1, idx)
+            res = torch.cat((res, xcol), dim=1)
+
+        return res
+
+# TODO: GQA, KV cache
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: TrainingConfig):
         super().__init__()
