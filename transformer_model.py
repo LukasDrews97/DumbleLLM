@@ -80,28 +80,42 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config: TrainingConfig):
         super().__init__()
         self.config = config
-        self.att_w = nn.Linear(config.model_dim, 3 * config.model_dim, bias=False)
-        self.dropout = nn.Dropout(config.dropout)
-        self.output = nn.Linear(config.model_dim, config.model_dim, bias=False)
 
+        assert self.config.model_dim % self.config.n_query_heads == 0
+        assert self.config.model_dim % self.config.n_key_value_heads == 0
+
+        #self.att_head_dim = self.config.model_dim // self.config.n_query_heads
+        #self.kv_head_dim = self.config.model_dim // self.config.n_key_value_heads
+
+        self.head_dim = self.config.model_dim // self.config.n_key_value_heads
+
+        #self.att_w = nn.Linear(config.model_dim, 3 * config.model_dim, bias=False)
+
+        self.wq = nn.Linear(config.model_dim, config.n_query_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(config.model_dim, config.n_key_value_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(config.model_dim, config.n_key_value_heads * self.head_dim, bias=False)
+
+        self.dropout = nn.Dropout(config.dropout)
+        self.output = nn.Linear(config.n_query_heads * self.head_dim, config.model_dim, bias=False)
 
     def forward(self, x):
         batch_size, sequence_length, model_dim = x.shape
-        query, key, value = self.att_w(x).split(self.config.model_dim, dim=2)
+        #query, key, value = self.att_w(x).split(self.config.model_dim, dim=2)
 
-        assert self.config.model_dim % self.config.n_attention_heads == 0
-        assert self.config.model_dim % self.config.n_key_value_heads == 0
+        query, key, value = self.wq(x), self.wk(x), self.wv(x)
 
-        att_head_dim = self.config.model_dim // self.config.n_attention_heads
-        kv_head_dim = self.config.model_dim // self.config.n_key_value_heads
+        query = query.view(batch_size, sequence_length, self.config.n_query_heads, self.head_dim).transpose(1, 2)
+        key = key.view(batch_size, sequence_length, self.config.n_key_value_heads, self.head_dim).transpose(1, 2)
+        value = value.view(batch_size, sequence_length, self.config.n_key_value_heads, self.head_dim).transpose(1, 2)
 
-        query = query.view(batch_size, sequence_length, self.config.n_attention_heads, att_head_dim).transpose(1, 2)
-        key = key.view(batch_size, sequence_length, self.config.n_key_value_heads, kv_head_dim).transpose(1, 2)
-        value = value.view(batch_size, sequence_length, self.config.n_key_value_heads, kv_head_dim).transpose(1, 2)
+        enable_gqa = False
+        if self.config.n_query_heads != self.config.n_key_value_heads:
+            assert self.config.n_query_heads % self.config.n_key_value_heads == 0
+            enable_gqa = True
 
         # Flash Attention
-        x = F.scaled_dot_product_attention(query, key, value, dropout_p=self.config.dropout if self.training else 0, is_causal=True)
-        x = x.transpose(1, 2).contiguous().view(batch_size, sequence_length, model_dim)
+        x = F.scaled_dot_product_attention(query, key, value, dropout_p=self.config.dropout if self.training else 0, is_causal=True, enable_gqa=enable_gqa)
+        x = x.transpose(1, 2).contiguous().view(batch_size, sequence_length, -1)
         x = self.dropout(self.output(x))
         return x
 
