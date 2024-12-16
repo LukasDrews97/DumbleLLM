@@ -32,7 +32,7 @@ class Tokenizer:
             unk_id=0,
             bos_id=1,
             eos_id=2,
-            pad_id=-1,
+            pad_id=3,
             num_threads=os.cpu_count(),
             minloglevel=10,
         )
@@ -57,6 +57,10 @@ class Tokenizer:
 
     def decode(self, tokens):
         return self.sp.decode(tokens)
+    
+    @property
+    def pad_id(self):
+        return self.sp.pad_id()
     
     @classmethod
     def from_file(file_path):

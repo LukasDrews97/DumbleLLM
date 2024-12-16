@@ -14,11 +14,11 @@ if __name__ == '__main__':
 
     tokenizer = Tokenizer(input_file=TRAINING_DATA, vocab_size=config.vocab_size, retrain=True)
 
-    ids = tokenizer.encode('Hello World!')
-    print(ids)
+    #ids = tokenizer.encode('Hello World!')
+    #print(ids)
 
-    text = tokenizer.decode(ids)
-    print(text)
+    #text = tokenizer.decode(ids)
+    #print(text)
 
     dataset = Dataset(TRAINING_DATA, tokenizer, config.batch_size, config.context_length)
     train_set, test_set = torch.utils.data.random_split(dataset, [0.8, 0.2])
@@ -68,7 +68,8 @@ if __name__ == '__main__':
             if (idx+1) % n_grad_accum_steps == 0 or (idx+1 == len(train_dataloader)): # optimize after one full batch was processed
                 optimizer.step()
                 optimizer.zero_grad()
-                print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item()}")
+                print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item():.2f}")
+            
             
             if idx % 100 == 0:
                 with torch.inference_mode():
@@ -80,19 +81,25 @@ if __name__ == '__main__':
                             _, test_loss = model(test_token, test_targets)
                             test_loss_sum += test_loss
                     print(f"epoch: {epoch} idx: {idx} TEST LOSS: {(test_loss_sum / len(test_dataloader)):.2f}")
-
+            
+            
         
         print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
 
+
+        # TODO: fix newline token
+        print("STARTING TEXT GENERATION")
         model.eval()
         with torch.inference_mode():
-            start = "Harry saw "
+            start = "Harry saw that "
             tokens = torch.tensor(tokenizer.encode(start)).view(1, -1)
+            #print(tokens.shape)
             tokens = tokens.to(config.device)
-            logits = model.generate(tokens, max_length=30)
+            logits = model.generate(tokens, max_length=100)
             res = tokenizer.decode(logits.tolist())[0]
             res = res.replace('\n', ' ')
             print(res)
 
-
-    #print(model.forward(torch.tensor(ids, device=config.device).view(1, -1)))
+    # TODO: add checkpoints for model training
+    # TODO: load model from weights
+    # TODO: HellaSwag, Perplexity
