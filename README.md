@@ -1,6 +1,6 @@
 # DumbleLLM - Custom Large Language Model
 
-This repository contains the code for a decoder-only transformer, similar to Llama, or GPT. It was trained on an English corpus built from the seven Harry Potter books.
+This repository contains the code for a decoder-only transformer, similar to Llama or GPT. It was trained on an English corpus built from the seven Harry Potter books and has roughly 75M trainable parameters.
 
 # Technical Features
 
@@ -13,7 +13,7 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 
 # Training Configuration
 | **Parameter**          | **Value**   |
-|-------------------------|-------------|
+|------------------------|-------------|
 | Layer                  | 4           |
 | Model Dimension        | 768         |
 | Context Length         | 1024        |
