@@ -6,7 +6,7 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 
 - Tokenization: Byte pair encoding (sentencepiece)
 - FlashAttention, Grouped Query Attention
-- Rotary Embeddings
+- Rotary Positional Embeddings
 - Key Value Cache
 - Sampling: top-p, top-k
 
