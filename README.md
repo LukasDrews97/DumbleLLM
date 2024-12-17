@@ -6,7 +6,7 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 
 - Tokenization: Byte pair encoding (sentencepiece)
 - FlashAttention, Grouped Query Attention
-- Rotary Positional Embeddings
+- Rotary Position Embeddings
 - Key Value Cache
 - Sampling: top-p, top-k
 
@@ -22,6 +22,14 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 | Vocabulary Size        | 32000       |
 | RoPE Theta             | 10000       |
 
+"markdown-checkbox.strikeThroughWhenChecked": true
+
+# Roadmap
+- [x] ~~Grouped Query Attention~~
+- [x] ~~Rotary Position Embeddings~~
+- [x] ~~Key Value Cache~~
+- [ ] Enable distributed training
+- [ ] Add Mixture of Experts model
 
 # Example Prompts
 TODO
