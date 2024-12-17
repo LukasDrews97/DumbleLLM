@@ -16,6 +16,7 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 |-------------------------|-------------|
 | Layer                  | 4           |
 | Model Dimension        | 768         |
+| Context Length         | 1024        |
 | Attention Heads        | 8           |
 | Key/Value Heads        | 4           |
 | Vocabulary Size        | 32000       |
