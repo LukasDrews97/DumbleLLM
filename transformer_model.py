@@ -100,52 +100,60 @@ class DumbleLLM(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
 
         return logits, loss
+        
 
-    # TODO: top-p sampling
     @torch.inference_mode()
-    def top_p_sampling(self, prompts: List[str], temperature: float = 0.6, p: float = 0.9, max_length: Optional[int] = None):
+    def generate(self, prompts, max_length, strategy="top_p", top_p=0.9, top_p_temperature=1):
+        result_list = []
 
-        if max_length is None:
-            max_length = self.config.context_length
-
-        for p in prompts:
-            tokens = torch.tensor(self.tokenizer.encode(p, add_bos=True, add_eps=False)).view(1, -1)
+        for prompt in prompts:
+            tokens = torch.tensor(self.tokenizer.encode(prompt)).view(1, -1)
             tokens = tokens.to(self.config.device)
-        
-
-    @torch.inference_mode()
-    def generate(self, tokens, max_length):
-        res = tokens
-        assert res.shape[1] < self.config.context_length
-        max_length = min(max_length, self.config.context_length)
-        
-        p = 0.7
-
-        pos = 0
-        while res.shape[1] < max_length:
-            with torch.autocast(device_type=self.config.device, dtype=torch.bfloat16):
-                logits, _ = self.forward(res, start_pos=pos)
-            logits = logits[:, -1, :]
-            probs = F.softmax(logits, dim=-1)
-            '''
-            probs_sorted, probs_idx = torch.sort(probs, dim=-1, descending=True)
-            cum_probs = torch.cumsum(probs, dim=-1)
-            mask = cum_probs - probs_sorted > p
-            probs_sorted[mask] = 0.0
-            probs_sorted.div_(probs_sorted.sum(dim=-1, keepdim=True))
-            idx = torch.multinomial(probs_sorted, 1) # (B, 1)
-            xcol = torch.gather(probs_idx, -1, idx)
-            res = torch.cat((res, xcol), dim=1)
-            '''
-
-            topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-            idx = torch.multinomial(topk_probs, 1) # (B, 1)
-            xcol = torch.gather(topk_indices, -1, idx)
-            res = torch.cat((res, xcol), dim=1)
             
-            pos = res.shape[1] - 1
+            result = tokens
+            assert result.shape[1] < self.config.context_length
+            max_length = min(max_length, self.config.context_length)
 
-        return res
+            pos = 0
+            while result.shape[1] < max_length:
+                with torch.autocast(device_type=self.config.device, dtype=torch.bfloat16):
+                    logits, _ = self.forward(result, start_pos=pos)
+                logits = logits[:, -1, :]
+                logits /= top_p_temperature
+                probs = F.softmax(logits, dim=-1)
+
+                if strategy == "top_p":
+                    new_token = self._top_p_sampling(probs, top_p)
+                elif strategy == "top_k":
+                    new_token = self._top_k_sampling(probs)
+                
+                result = torch.cat((result, new_token), dim=1)
+                if new_token == self.tokenizer.eos_id:
+                    break
+                pos = result.shape[1] - 1
+
+            result_list.append(result)
+        
+        result_list = [self.tokenizer.decode(result.tolist()[0]) for result in result_list]
+        result_list = [result.replace('\n', ' ') for result in result_list]
+        return result_list
+    
+    def _top_k_sampling(self, probs):
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        idx = torch.multinomial(topk_probs, 1)
+        col = torch.gather(topk_indices, -1, idx)
+        return col
+
+    def _top_p_sampling(self, probs, p=0.9):
+        probs_sorted, probs_idx = torch.sort(probs, dim=-1, descending=True)
+        cum_probs = torch.cumsum(probs, dim=-1)
+        mask = cum_probs - probs_sorted > p
+        probs_sorted[mask] = 0.0
+        probs_sorted.div_(probs_sorted.sum(dim=-1, keepdim=True))
+        idx = torch.multinomial(probs_sorted, 1)
+        col = torch.gather(probs_idx, -1, idx)
+        return col
+
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):

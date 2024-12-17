@@ -46,7 +46,7 @@ if __name__ == '__main__':
 
     model = DumbleLLM(config, tokenizer)
     model.to(config.device)
-    #model = torch.compile(model)
+    model = torch.compile(model)
 
     print(f"model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
 
@@ -92,19 +92,21 @@ if __name__ == '__main__':
         print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
 
 
-        # TODO: fix newline token
         print("STARTING TEXT GENERATION")
         model.eval()
         with torch.inference_mode():
-            start = "Harry saw that "
-            tokens = torch.tensor(tokenizer.encode(start)).view(1, -1)
-            #print(tokens.shape)
-            tokens = tokens.to(config.device)
-            logits = model.generate(tokens, max_length=config.context_length)
-            res = tokenizer.decode(logits.tolist())[0]
-            res = res.replace('\n', ' ')
-            print(res)
+            prompts = ["Harry saw that ", "Dumbledore "]
+            results = model.generate(prompts, max_length=config.context_length, strategy="top_p")
+            #res = tokenizer.decode(logits.tolist())[0]
+            #res = res.replace('\n', ' ')
+            for idx, res in enumerate(results):
+                print(f"PROMPT {idx+1}:")
+                print(res)
+                print("=============================================")
+            
+
 
     # TODO: add checkpoints for model training
     # TODO: load model from weights
     # TODO: HellaSwag, Perplexity
+    # TODO: logging

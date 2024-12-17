@@ -61,6 +61,10 @@ class Tokenizer:
     @property
     def pad_id(self):
         return self.sp.pad_id()
+
+    @property
+    def eos_id(self):
+        return self.sp.eos_id()
     
     @classmethod
     def from_file(file_path):

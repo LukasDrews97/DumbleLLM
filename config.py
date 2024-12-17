@@ -16,7 +16,7 @@ class TrainingConfig:
     rope_theta: float = 50000
 
     # training
-    batch_size: int = 128
+    batch_size: int = 32
     micro_batch_size: int = 4 # set to batch_size to disable gradient accumulation
     n_epochs: int = 10
     dropout : float = 0.1
