@@ -4,6 +4,9 @@ import torch.nn.functional as F
 from config import TrainingConfig
 from typing import Optional, List
 from torch.types import Tuple
+import math
+
+from torch.nn.init import _calculate_fan_in_and_fan_out
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, config: TrainingConfig):
@@ -15,7 +18,7 @@ class RotaryEmbedding(nn.Module):
 
         numerator = torch.arange(0, head_dim, 2, dtype=torch.float32, device=config.device)
         freqs = 1.0 / (config.rope_theta ** (numerator / head_dim))
-        t = torch.arange(config.context_length, device=config.device)
+        t = torch.arange(2* config.context_length, device=config.device)
 
         freqs = torch.outer(t, freqs)
         self.freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
@@ -34,6 +37,8 @@ class RotaryEmbedding(nn.Module):
         if sequence_length < self.config.context_length:
             assert start_pos is not None
             freqs_complex = freqs_complex[:, start_pos:start_pos+sequence_length, :, :]
+        else:
+            freqs_complex = freqs_complex[:, :sequence_length, :, :]
 
         query = torch.view_as_real(query * freqs_complex).reshape(*q_shape)
         key = torch.view_as_real(key * freqs_complex).reshape(*k_shape)
@@ -48,19 +53,29 @@ class SwiGLU(nn.Module):
 
 class KeyValueCache:
     def __init__(self, config: TrainingConfig):
+        self.initialized = False
         assert config.model_dim % config.n_key_value_heads == 0
         head_dim = config.model_dim // config.n_query_heads
 
         self.keys = torch.zeros((config.batch_size, config.context_length, config.n_key_value_heads, head_dim), device=config.device)
         self.values = torch.zeros((config.batch_size, config.context_length, config.n_key_value_heads, head_dim), device=config.device)
 
+
     def update(self, batch_size, start_pos, key, value):
         assert key.shape[1] == value.shape[1]
         sequence_length = key.shape[1]
-        self.keys[:batch_size, start_pos: start_pos+sequence_length] = key
-        self.values[:batch_size, start_pos: start_pos+sequence_length] = value
+        self.initialized = True
+
+        #print(f"start_pos {start_pos} seq_len: {sequence_length} added: {start_pos + sequence_length}")
+        #                               0:5 -> [0,1,2,3,4]
+        #                               5:6 -> [5]
+        self.keys[:batch_size, start_pos: start_pos + sequence_length] = key
+        self.values[:batch_size, start_pos: start_pos + sequence_length] = value
 
     def get(self, batch_size, start_pos, sequence_length):
+        assert self.initialized
+        #                                 0:5 -> [0,1,2,3,4]
+        #                                 0:6 -> [0,1,2,3,4,5] 
         keys = self.keys[:batch_size, :start_pos + sequence_length]
         values = self.values[:batch_size, :start_pos + sequence_length]
         return keys, values
@@ -76,8 +91,10 @@ class DumbleLLM(nn.Module):
         self.norm = nn.RMSNorm(config.model_dim)
         self.output = nn.Linear(config.model_dim, config.vocab_size, bias=False)
 
-        # TODO: weight initialization
-        # TODO: weight tying
+        # weight tying
+        self.token_embedding.weight = self.output.weight
+
+        self.apply(self._init_weights)
 
     def forward(self, tokens, targets=None, start_pos=None):
         x = self.token_embedding(tokens)
@@ -105,21 +122,50 @@ class DumbleLLM(nn.Module):
     @torch.inference_mode()
     def generate(self, tokens, max_length):
         res = tokens
-        assert res.shape[1] <= self.config.context_length
+        assert res.shape[1] < self.config.context_length
+        max_length = min(max_length, self.config.context_length)
         
+        p = 0.7
+
         pos = 0
         while res.shape[1] < max_length:
             with torch.autocast(device_type=self.config.device, dtype=torch.bfloat16):
                 logits, _ = self.forward(res, start_pos=pos)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
+            '''
+            probs_sorted, probs_idx = torch.sort(probs, dim=-1, descending=True)
+            cum_probs = torch.cumsum(probs, dim=-1)
+            mask = cum_probs - probs_sorted > p
+            probs_sorted[mask] = 0.0
+            probs_sorted.div_(probs_sorted.sum(dim=-1, keepdim=True))
+            idx = torch.multinomial(probs_sorted, 1) # (B, 1)
+            xcol = torch.gather(probs_idx, -1, idx)
+            res = torch.cat((res, xcol), dim=1)
+            '''
+
             topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
             idx = torch.multinomial(topk_probs, 1) # (B, 1)
             xcol = torch.gather(topk_indices, -1, idx)
             res = torch.cat((res, xcol), dim=1)
-            pos = res.shape[1]
+            
+            pos = res.shape[1] - 1
 
         return res
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            #if hasattr(module, 'SCALE_INIT'):
+            #    fan_in, fan_out = _calculate_fan_in_and_fan_out(module.weight)
+            #    std = math.sqrt(2.0 / float(fan_in + fan_out))
+            #    std *= (2 * self.config.n_layers) ** -0.5
+            #    torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            #else:
+            torch.nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        if isinstance(module, nn.Embedding):
+            torch.nn.init.xavier_normal_(module.weight)
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: TrainingConfig):
@@ -141,6 +187,7 @@ class CausalSelfAttention(nn.Module):
 
         self.dropout = nn.Dropout(config.dropout)
         self.output = nn.Linear(config.n_query_heads * self.head_dim, config.model_dim, bias=False)
+        #self.output.SCALE_INIT = 1
 
         if self.config.use_kv_cache:
             self.kv_cache = KeyValueCache(self.config)
@@ -148,20 +195,39 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x, start_pos=None):
         batch_size, sequence_length, model_dim = x.shape
 
-        #query, key, value = self.att_w(x).split(self.config.model_dim, dim=2)
+        #if not self.training:
+        #    print(f"x.shape: {x.shape}, start_pos: {start_pos}")
 
-        query, key, value = self.wq(x), self.wk(x), self.wv(x)
+        query = self.wq(x)
+
+        use_kv_cache = self.config.use_kv_cache and not self.training and start_pos is not None
+        view_kv_sequence_length = sequence_length
+
+        if use_kv_cache and self.kv_cache.initialized:
+            x = x[:, -1, :] # Extract new token
+            #print(x.shape)
+            view_kv_sequence_length = 1
+
+        #query = self.wq(x)
+        key, value = self.wk(x), self.wv(x)
 
         query = query.view(batch_size, sequence_length, self.config.n_query_heads, self.head_dim)
-        key = key.view(batch_size, sequence_length, self.config.n_key_value_heads, self.head_dim)
-        value = value.view(batch_size, sequence_length, self.config.n_key_value_heads, self.head_dim)
+        key = key.view(batch_size, view_kv_sequence_length, self.config.n_key_value_heads, self.head_dim)
+        value = value.view(batch_size, view_kv_sequence_length, self.config.n_key_value_heads, self.head_dim)
 
-        query, key = self.pos_embedding(query, key, start_pos)
+        #query, key = self.pos_embedding(query, key, start_pos)
 
         # use key value cache at inference
-        if self.config.use_kv_cache and not self.training and start_pos is not None:
+        if use_kv_cache:
             self.kv_cache.update(batch_size, start_pos, key, value)
-            key, value = self.kv_cache.get(batch_size, start_pos, sequence_length)
+            key, value = self.kv_cache.get(batch_size, start_pos, view_kv_sequence_length)
+        
+
+
+        #if not self.training:
+        #    print(f"query: {query.shape}, key: {key.shape}, value: {value.shape}")
+
+        query, key = self.pos_embedding(query, key, start_pos)
 
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
@@ -202,6 +268,7 @@ class FeedForward(nn.Module):
         self.swiglu = SwiGLU()
         self.w2 = nn.Linear(config.model_dim, 2 * config.model_dim, bias=False)
         self.w3 = nn.Linear(2 * config.model_dim, config.model_dim, bias=False)
+        #self.w3.SCALE_INIT = 1
         self.dropout = nn.Dropout(config.dropout)
 
 

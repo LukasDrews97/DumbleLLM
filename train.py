@@ -10,8 +10,11 @@ TRAINING_DATA = 'data/input.txt'
 
 
 if __name__ == '__main__':
-    config = TrainingConfig()
 
+    torch.manual_seed(100)
+    torch.cuda.manual_seed(100)
+
+    config = TrainingConfig()
     tokenizer = Tokenizer(input_file=TRAINING_DATA, vocab_size=config.vocab_size, retrain=True)
 
     #ids = tokenizer.encode('Hello World!')
@@ -43,10 +46,9 @@ if __name__ == '__main__':
 
     model = DumbleLLM(config, tokenizer)
     model.to(config.device)
-    model = torch.compile(model)
+    #model = torch.compile(model)
 
     print(f"model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
-    #import sys; sys.exit()
 
     # TODO: add LRScheduler, weight decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
@@ -66,11 +68,12 @@ if __name__ == '__main__':
 
             # accumulate gradients
             if (idx+1) % n_grad_accum_steps == 0 or (idx+1 == len(train_dataloader)): # optimize after one full batch was processed
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 optimizer.zero_grad()
-                print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item():.2f}")
+                print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item():.2f} norm: {norm:.4f}")
             
-            
+            '''
             if idx % 100 == 0:
                 with torch.inference_mode():
                     model.eval()
@@ -80,9 +83,11 @@ if __name__ == '__main__':
                         with torch.autocast(device_type=config.device, dtype=torch.bfloat16):
                             _, test_loss = model(test_token, test_targets)
                             test_loss_sum += test_loss
-                    print(f"epoch: {epoch} idx: {idx} TEST LOSS: {(test_loss_sum / len(test_dataloader)):.2f}")
+                    print(f"epoch: {epoch+1}/{config.n_epochs} idx: {idx} TEST LOSS: {(test_loss_sum / len(test_dataloader)):.2f}")
+            '''
             
-            
+            if idx == 10 * n_grad_accum_steps:
+                break
         
         print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
 
@@ -95,7 +100,7 @@ if __name__ == '__main__':
             tokens = torch.tensor(tokenizer.encode(start)).view(1, -1)
             #print(tokens.shape)
             tokens = tokens.to(config.device)
-            logits = model.generate(tokens, max_length=100)
+            logits = model.generate(tokens, max_length=config.context_length)
             res = tokenizer.decode(logits.tolist())[0]
             res = res.replace('\n', ' ')
             print(res)
