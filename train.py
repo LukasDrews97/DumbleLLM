@@ -2,19 +2,20 @@ from tokenizer import Tokenizer
 from transformer_model import DumbleLLM
 from config import TrainingConfig
 from data_loader import Dataset
+from logger import Logger
 import torch
 from tqdm import tqdm
 import os
 
 TRAINING_DATA = 'data/input.txt'
-MODEL_WEIGHTS_PATH = "saved"
-LOGGING_PATH = "saved" 
+MODEL_WEIGHTS_DIR = "saved"
+LOGGING_DIR = "saved" 
 
 
 
 if __name__ == '__main__':
 
-    os.makedirs(MODEL_WEIGHTS_PATH, exist_ok=True)
+    os.makedirs(MODEL_WEIGHTS_DIR, exist_ok=True)
 
     torch.manual_seed(100)
     torch.cuda.manual_seed(100)
@@ -22,11 +23,7 @@ if __name__ == '__main__':
     config = TrainingConfig()
     tokenizer = Tokenizer(input_file=TRAINING_DATA, vocab_size=config.vocab_size, retrain=True)
 
-    #ids = tokenizer.encode('Hello World!')
-    #print(ids)
-
-    #text = tokenizer.decode(ids)
-    #print(text)
+    logger = Logger(path=LOGGING_DIR)
 
     dataset = Dataset(TRAINING_DATA, tokenizer, config.batch_size, config.context_length)
     train_set, test_set = torch.utils.data.random_split(dataset, [0.8, 0.2])
@@ -52,7 +49,7 @@ if __name__ == '__main__':
     model = DumbleLLM(config, tokenizer)
     model.to(config.device)
 
-    #checkpoint = torch.load(f"{MODEL_WEIGHTS_PATH}/state.pt", weights_only=True)
+    #checkpoint = torch.load(f"{MODEL_WEIGHTS_DIR}/state.pt", weights_only=True)
     #model.load_state_dict(checkpoint['model_state_dict'])
     model = torch.compile(model)
 
@@ -60,6 +57,7 @@ if __name__ == '__main__':
 
     # TODO: add LRScheduler, weight decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    #optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     n_grad_accum_steps = config.batch_size // config.micro_batch_size
 
@@ -80,39 +78,38 @@ if __name__ == '__main__':
                 optimizer.step()
                 optimizer.zero_grad()
                 print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item():.2f} norm: {norm:.4f}")
+                logger.log_train_loss(epoch+1, idx, loss.item(), config.batch_size)
             
-            
-            if idx % 100 == 0:
-                with torch.inference_mode():
-                    model.eval()
-                    test_loss_sum = 0
-                    for test_token, test_targets in test_dataloader:
-                        test_token, test_targets = test_token.to(config.device), test_targets.to(config.device)
-                        with torch.autocast(device_type=config.device, dtype=torch.bfloat16):
-                            _, test_loss = model(test_token, test_targets)
-                            test_loss_sum += test_loss
-                    print(f"epoch: {epoch+1}/{config.n_epochs} idx: {idx} TEST LOSS: {(test_loss_sum / len(test_dataloader)):.2f}")
-            
-            
-            #if idx == 10 * n_grad_accum_steps:
-            #    break
         
-        print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
+        # calculate test loss after each epoch
+        with torch.inference_mode():
+            model.eval()
+            test_loss_sum = 0
+            for test_token, test_targets in test_dataloader:
+                test_token, test_targets = test_token.to(config.device), test_targets.to(config.device)
+                with torch.autocast(device_type=config.device, dtype=torch.bfloat16):
+                    _, test_loss = model(test_token, test_targets)
+                    test_loss_sum += test_loss
+
+            avg_test_loss = (test_loss_sum / len(test_dataloader)).item()
+            print(f"epoch: {epoch+1}/{config.n_epochs} AVG TEST LOSS: {avg_test_loss:.2f}")
+            
+            
+        avg_train_loss = (train_loss_sum / len(train_dataloader)).item()
+        print(f"EPOCH {epoch+1}/{config.n_epochs} AVERAGE TRAIN LOSS: {avg_train_loss:.2f}")
+
+        logger.log_loss_epoch(epoch+1, avg_train_loss, avg_test_loss)
 
         # save current model
         torch.save({
-            'epoch': epoch,
+            'epoch': epoch+1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'train_loss': (train_loss_sum / len(train_dataloader)),
             'test_loss': (test_loss_sum / len(test_dataloader))
-        }, f"{MODEL_WEIGHTS_PATH}/state.pt")
-        
-        #checkpoint = torch.load(f"{MODEL_WEIGHTS_PATH}/state.pt", weights_only=True)
-        #model.load_state_dict(checkpoint['model_state_dict'])
-        #optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        }, f"{MODEL_WEIGHTS_DIR}/state.pt")
 
-
+        # generate text
         print("STARTING TEXT GENERATION")
         model.eval()
         with torch.inference_mode():
@@ -122,8 +119,12 @@ if __name__ == '__main__':
                 print(f"PROMPT {idx+1}:")
                 print(res)
                 print("=============================================")
-
+            
+            for prompt, result in zip(prompts, results):
+                logger.log_prompt(epoch+1, prompt, result)
+        
+        logger.save_to_file()
 
 
     # TODO: HellaSwag, Perplexity
-    # TODO: logging
+    # TODO: README

@@ -4,6 +4,9 @@
 # Training data
 data/
 
+# Log data and weights
+saved/
+
 # Tokenizer
 *.vocab
 *.model
