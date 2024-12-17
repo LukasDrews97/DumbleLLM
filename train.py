@@ -4,12 +4,17 @@ from config import TrainingConfig
 from data_loader import Dataset
 import torch
 from tqdm import tqdm
+import os
 
 TRAINING_DATA = 'data/input.txt'
+MODEL_WEIGHTS_PATH = "saved"
+LOGGING_PATH = "saved" 
 
 
 
 if __name__ == '__main__':
+
+    os.makedirs(MODEL_WEIGHTS_PATH, exist_ok=True)
 
     torch.manual_seed(100)
     torch.cuda.manual_seed(100)
@@ -46,6 +51,9 @@ if __name__ == '__main__':
 
     model = DumbleLLM(config, tokenizer)
     model.to(config.device)
+
+    #checkpoint = torch.load(f"{MODEL_WEIGHTS_PATH}/state.pt", weights_only=True)
+    #model.load_state_dict(checkpoint['model_state_dict'])
     model = torch.compile(model)
 
     print(f"model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
@@ -91,22 +99,31 @@ if __name__ == '__main__':
         
         print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
 
+        # save current model
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'train_loss': (train_loss_sum / len(train_dataloader)),
+            'test_loss': (test_loss_sum / len(test_dataloader))
+        }, f"{MODEL_WEIGHTS_PATH}/state.pt")
+        
+        #checkpoint = torch.load(f"{MODEL_WEIGHTS_PATH}/state.pt", weights_only=True)
+        #model.load_state_dict(checkpoint['model_state_dict'])
+        #optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
 
         print("STARTING TEXT GENERATION")
         model.eval()
         with torch.inference_mode():
             prompts = ["Harry saw that ", "Dumbledore "]
             results = model.generate(prompts, max_length=config.context_length, strategy="top_p")
-            #res = tokenizer.decode(logits.tolist())[0]
-            #res = res.replace('\n', ' ')
             for idx, res in enumerate(results):
                 print(f"PROMPT {idx+1}:")
                 print(res)
                 print("=============================================")
-            
 
 
-    # TODO: add checkpoints for model training
-    # TODO: load model from weights
+
     # TODO: HellaSwag, Perplexity
     # TODO: logging
