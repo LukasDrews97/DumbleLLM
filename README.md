@@ -22,7 +22,6 @@ This repository contains the code for a decoder-only transformer, similar to Lla
 | Vocabulary Size        | 32000       |
 | RoPE Theta             | 10000       |
 
-"markdown-checkbox.strikeThroughWhenChecked": true
 
 # Roadmap
 - [x] ~~Grouped Query Attention~~
