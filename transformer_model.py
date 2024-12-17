@@ -26,22 +26,21 @@ class RotaryEmbedding(nn.Module):
     def forward(self, query, key, start_pos=None):
         q_shape = query.shape
         k_shape = key.shape
-        assert q_shape[1] == k_shape[1]
-        sequence_length = q_shape[1]
 
         query = torch.view_as_complex(query.float().reshape(*q_shape[:-1], -1, 2))
         key = torch.view_as_complex(key.float().reshape(*k_shape[:-1], -1, 2))
 
         freqs_complex = self.freqs_complex.unsqueeze(0).unsqueeze(2)
 
-        if sequence_length < self.config.context_length:
-            assert start_pos is not None
-            freqs_complex = freqs_complex[:, start_pos:start_pos+sequence_length, :, :]
+        if start_pos is not None: # inference
+            freqs_complex_query = freqs_complex[:, start_pos:start_pos + q_shape[1], :, :]
+            freqs_complex_key = freqs_complex[:, start_pos:start_pos + k_shape[1], :, :]
         else:
-            freqs_complex = freqs_complex[:, :sequence_length, :, :]
+            freqs_complex_query = freqs_complex[:, :q_shape[1], :, :]
+            freqs_complex_key = freqs_complex[:, :k_shape[1], :, :]
 
-        query = torch.view_as_real(query * freqs_complex).reshape(*q_shape)
-        key = torch.view_as_real(key * freqs_complex).reshape(*k_shape)
+        query = torch.view_as_real(query * freqs_complex_query).reshape(*q_shape)
+        key = torch.view_as_real(key * freqs_complex_key).reshape(*k_shape)
 
         return query, key
 
@@ -66,16 +65,11 @@ class KeyValueCache:
         sequence_length = key.shape[1]
         self.initialized = True
 
-        #print(f"start_pos {start_pos} seq_len: {sequence_length} added: {start_pos + sequence_length}")
-        #                               0:5 -> [0,1,2,3,4]
-        #                               5:6 -> [5]
         self.keys[:batch_size, start_pos: start_pos + sequence_length] = key
         self.values[:batch_size, start_pos: start_pos + sequence_length] = value
 
     def get(self, batch_size, start_pos, sequence_length):
         assert self.initialized
-        #                                 0:5 -> [0,1,2,3,4]
-        #                                 0:6 -> [0,1,2,3,4,5] 
         keys = self.keys[:batch_size, :start_pos + sequence_length]
         values = self.values[:batch_size, :start_pos + sequence_length]
         return keys, values
@@ -86,7 +80,7 @@ class DumbleLLM(nn.Module):
         self.config = config
         self.tokenizer = tokenizer
         self.token_embedding = nn.Embedding(config.vocab_size, config.model_dim)
-        #self.pos_embedding = nn.Embedding(config.vocab_size, config.model_dim)
+        self.pos_embedding = nn.Embedding(config.vocab_size, config.model_dim)
         self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layers)])
         self.norm = nn.RMSNorm(config.model_dim)
         self.output = nn.Linear(config.model_dim, config.vocab_size, bias=False)
@@ -193,42 +187,38 @@ class CausalSelfAttention(nn.Module):
             self.kv_cache = KeyValueCache(self.config)
 
     def forward(self, x, start_pos=None):
-        batch_size, sequence_length, model_dim = x.shape
+        batch_size, sequence_length, _ = x.shape
 
-        #if not self.training:
-        #    print(f"x.shape: {x.shape}, start_pos: {start_pos}")
+        query_length = sequence_length
+        kv_length = sequence_length
 
-        query = self.wq(x)
+        is_inference = (start_pos is not None and not self.training)
+        is_initial_prompt = (is_inference and start_pos == 0)
+        use_kv_cache = self.config.use_kv_cache and is_inference
 
-        use_kv_cache = self.config.use_kv_cache and not self.training and start_pos is not None
-        view_kv_sequence_length = sequence_length
+        if is_inference and not is_initial_prompt:
+            query_length = 1
+            query = self.wq(x[:, -1, :])                                #   inference, not initial prompt
+        
+            if use_kv_cache:
+                kv_length = 1
+                key, value = self.wk(x[:, -1, :]), self.wv(x[:, -1, :]) #   inference, not initial prompt, kv cache
+            else:
+                key, value = self.wk(x), self.wv(x)                     #   inference, not initial prompt, no kv cache
+        else:
+            query, key, value = self.wq(x), self.wk(x), self.wv(x)      #   training and inference with initial prompt
+        
+        query = query.view(batch_size, query_length, self.config.n_query_heads, self.head_dim)
+        key = key.view(batch_size, kv_length, self.config.n_key_value_heads, self.head_dim)
+        value = value.view(batch_size, kv_length, self.config.n_key_value_heads, self.head_dim)
 
-        if use_kv_cache and self.kv_cache.initialized:
-            x = x[:, -1, :] # Extract new token
-            #print(x.shape)
-            view_kv_sequence_length = 1
 
-        #query = self.wq(x)
-        key, value = self.wk(x), self.wv(x)
-
-        query = query.view(batch_size, sequence_length, self.config.n_query_heads, self.head_dim)
-        key = key.view(batch_size, view_kv_sequence_length, self.config.n_key_value_heads, self.head_dim)
-        value = value.view(batch_size, view_kv_sequence_length, self.config.n_key_value_heads, self.head_dim)
-
-        #query, key = self.pos_embedding(query, key, start_pos)
-
-        # use key value cache at inference
         if use_kv_cache:
             self.kv_cache.update(batch_size, start_pos, key, value)
-            key, value = self.kv_cache.get(batch_size, start_pos, view_kv_sequence_length)
-        
-
-
-        #if not self.training:
-        #    print(f"query: {query.shape}, key: {key.shape}, value: {value.shape}")
+            key, value = self.kv_cache.get(batch_size, start_pos, kv_length)
 
         query, key = self.pos_embedding(query, key, start_pos)
-
+        
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
@@ -240,7 +230,7 @@ class CausalSelfAttention(nn.Module):
 
         # Flash Attention
         x = F.scaled_dot_product_attention(query, key, value, dropout_p=self.config.dropout if self.training else 0, is_causal=True, enable_gqa=enable_gqa)
-        x = x.transpose(1, 2).contiguous().view(batch_size, sequence_length, -1)
+        x = x.transpose(1, 2).contiguous().view(batch_size, query_length, -1)
         x = self.dropout(self.output(x))
         return x
 

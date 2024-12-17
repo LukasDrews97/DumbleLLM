@@ -73,7 +73,7 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
                 print(f"step {idx+1}, training loss after {n_grad_accum_steps} grad accum. steps: {loss.item():.2f} norm: {norm:.4f}")
             
-            '''
+            
             if idx % 100 == 0:
                 with torch.inference_mode():
                     model.eval()
@@ -84,10 +84,10 @@ if __name__ == '__main__':
                             _, test_loss = model(test_token, test_targets)
                             test_loss_sum += test_loss
                     print(f"epoch: {epoch+1}/{config.n_epochs} idx: {idx} TEST LOSS: {(test_loss_sum / len(test_dataloader)):.2f}")
-            '''
             
-            if idx == 10 * n_grad_accum_steps:
-                break
+            
+            #if idx == 10 * n_grad_accum_steps:
+            #    break
         
         print(f"EPOCH {epoch} AVERAGE TRAIN LOSS: {(train_loss_sum / len(train_dataloader)):.2f}")
 
